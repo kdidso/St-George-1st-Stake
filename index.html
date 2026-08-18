@@ -272,6 +272,17 @@
       white-space: nowrap;
     }
 
+    .special-place-name {
+      font-weight: 700;
+    }
+
+    .special-place-address {
+      margin-top: 2px;
+      color: #666;
+      font-size: 11px;
+      line-height: 1.25;
+    }
+
     .search-message {
       padding: 10px 11px;
       color: #666;
@@ -544,8 +555,13 @@
     const STAKE_ADDRESS_GEOJSON_URL =
       "https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson";
 
+    const SPECIAL_LOCATION_GEOJSON_URL =
+      "https://raw.githubusercontent.com/kdidso/snow-canyon-map/refs/heads/main/SpecialLocatio_FeaturesToJSO.geojson";
+
     let stakeAddressRecords = [];
     let stakeAddressDataLoaded = false;
+    let specialLocationRecords = [];
+    let specialLocationDataLoaded = false;
 
 
 
@@ -630,6 +646,7 @@
       buildLayerControl();
       initPlaceSearch();
       loadStakeAddressData();
+      loadSpecialLocationData();
 
       wards.forEach((ward) => loadWardLayer(ward));
 
@@ -959,6 +976,71 @@
       }
     }
 
+    async function loadSpecialLocationData() {
+      try {
+        const response = await fetch(SPECIAL_LOCATION_GEOJSON_URL);
+        if (!response.ok) {
+          throw new Error("Special locations file returned " + response.status);
+        }
+
+        const geojson = await response.json();
+        const features = Array.isArray(geojson.features) ? geojson.features : [];
+
+        specialLocationRecords = features
+          .map((feature, index) => {
+            const coords = getPointCoordinates(feature.geometry);
+            if (!coords) return null;
+
+            const properties = feature.properties || {};
+            const name = String(
+              properties.Name ??
+              properties.name ??
+              properties.NAME ??
+              ""
+            ).trim();
+
+            const address = String(
+              properties.Address ??
+              properties.address ??
+              properties.ADDRESS ??
+              ""
+            ).trim();
+
+            const type = String(
+              properties.Location_type ??
+              properties.location_type ??
+              properties.Type ??
+              properties.type ??
+              ""
+            ).trim();
+
+            if (!name && !address) return null;
+
+            return {
+              id: "special-" + index,
+              display_name: name || address,
+              name,
+              address,
+              location_type: type,
+              lat: String(coords.lat),
+              lon: String(coords.lng),
+              source: "special"
+            };
+          })
+          .filter(Boolean);
+
+        specialLocationDataLoaded = true;
+        console.log(
+          "Loaded " + specialLocationRecords.length +
+          " searchable special locations."
+        );
+      } catch (error) {
+        specialLocationDataLoaded = false;
+        specialLocationRecords = [];
+        console.warn("Could not load special location search data:", error);
+      }
+    }
+
     function getPointCoordinates(geometry) {
       if (!geometry || !geometry.coordinates) return null;
 
@@ -1156,8 +1238,74 @@
       return unique;
     }
 
+    function getSpecialLocationMatches(query, limit = 6) {
+      if (!specialLocationDataLoaded || !query) return [];
+
+      const normalizedQuery = normalizeSearchText(query);
+      if (normalizedQuery.length < 2) return [];
+
+      const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+
+      const scored = specialLocationRecords.map((record) => {
+        const name = normalizeSearchText(record.name);
+        const address = normalizeSearchText(record.address);
+        const combined = [name, address].filter(Boolean).join(" ");
+        let score = 0;
+
+        // Name matches are strongest for special places.
+        if (name) {
+          if (name.startsWith(normalizedQuery)) {
+            score += 1200;
+          } else if (name.includes(normalizedQuery)) {
+            score += 850;
+          }
+        }
+
+        // Address matches should also surface the same special location.
+        if (address) {
+          if (address.startsWith(normalizedQuery)) {
+            score += 1000;
+          } else if (address.includes(normalizedQuery)) {
+            score += 700;
+          }
+        }
+
+        let tokenMatches = 0;
+        queryTokens.forEach((queryToken) => {
+          const nameTokens = name.split(" ");
+          const addressTokens = address.split(" ");
+
+          if (nameTokens.some((token) => token.startsWith(queryToken))) {
+            score += 130;
+            tokenMatches += 1;
+          } else if (addressTokens.some((token) => token.startsWith(queryToken))) {
+            score += 80;
+            tokenMatches += 1;
+          } else if (combined.includes(queryToken)) {
+            score += 35;
+            tokenMatches += 1;
+          }
+        });
+
+        if (tokenMatches === queryTokens.length) {
+          score += 220;
+        }
+
+        return { ...record, score };
+      });
+
+      return scored
+        .filter((record) => record.score > 0)
+        .sort((a, b) =>
+          b.score - a.score ||
+          (a.name || a.address).localeCompare(b.name || b.address)
+        )
+        .slice(0, limit);
+    }
+
     async function runLocationSearch(query) {
       const resultsBox = document.getElementById("searchResults");
+      const specialResults = getSpecialLocationMatches(query, 6);
       const localResults = getStakeAddressMatches(query, 6);
 
       if (activeSearchController) {
@@ -1166,9 +1314,14 @@
 
       activeSearchController = new AbortController();
 
-      // Show known stake-address matches immediately while the broader
-      // LocationIQ request is still running.
-      renderHybridSearchResults(localResults, [], true);
+      // Show known special places and stake addresses immediately while
+      // LocationIQ continues searching the broader world.
+      renderHybridSearchResults(
+        specialResults,
+        localResults,
+        [],
+        true
+      );
 
       const params = new URLSearchParams({
         key: LOCATIONIQ_TOKEN,
@@ -1203,6 +1356,7 @@
 
         const results = await response.json();
         renderHybridSearchResults(
+          specialResults,
           localResults,
           Array.isArray(results) ? results : [],
           false
@@ -1210,13 +1364,19 @@
       } catch (error) {
         if (error.name === "AbortError") return;
 
-        // Keep the stake-address matches usable even if LocationIQ is down.
-        renderHybridSearchResults(localResults, [], false, true);
+        renderHybridSearchResults(
+          specialResults,
+          localResults,
+          [],
+          false,
+          true
+        );
         console.error("LocationIQ search error:", error);
       }
     }
 
     function renderHybridSearchResults(
+      specialResults,
       localResults,
       locationIqResults,
       loadingLocationIq = false,
@@ -1225,12 +1385,22 @@
       const resultsBox = document.getElementById("searchResults");
       resultsBox.innerHTML = "";
 
+      if (specialResults.length > 0) {
+        addSearchSectionLabel(resultsBox, "Stake places");
+
+        specialResults.forEach((result) => {
+          resultsBox.appendChild(
+            createSearchResultButton(result, "special")
+          );
+        });
+      }
+
       if (localResults.length > 0) {
         addSearchSectionLabel(resultsBox, "Stake addresses");
 
         localResults.forEach((result) => {
           resultsBox.appendChild(
-            createSearchResultButton(result, true)
+            createSearchResultButton(result, "stake")
           );
         });
       }
@@ -1246,7 +1416,7 @@
 
         locationIqResults.forEach((result) => {
           resultsBox.appendChild(
-            createSearchResultButton(result, false)
+            createSearchResultButton(result, "locationiq")
           );
         });
 
@@ -1259,11 +1429,11 @@
         const message = document.createElement("div");
         message.className = "search-message";
         message.textContent =
-          localResults.length > 0
+          specialResults.length > 0 || localResults.length > 0
             ? "Broader place search is temporarily unavailable."
             : "Search is temporarily unavailable.";
         resultsBox.appendChild(message);
-      } else if (localResults.length === 0) {
+      } else if (specialResults.length === 0 && localResults.length === 0) {
         const message = document.createElement("div");
         message.className = "search-message";
         message.textContent = "No matching places found.";
@@ -1286,24 +1456,45 @@
       container.appendChild(label);
     }
 
-    function createSearchResultButton(result, preferred) {
+    function createSearchResultButton(result, sourceType) {
       const button = document.createElement("button");
       button.type = "button";
       button.className =
-        "search-result" + (preferred ? " preferred-search-result" : "");
+        "search-result" +
+        (sourceType === "stake" || sourceType === "special"
+          ? " preferred-search-result"
+          : "");
       button.setAttribute("role", "option");
 
       const main = document.createElement("div");
       main.className = "search-result-main";
-      main.textContent =
-        result.display_name || result.name || "Search result";
+
+      if (sourceType === "special") {
+        const nameLine = document.createElement("div");
+        nameLine.className = "special-place-name";
+        nameLine.textContent = result.name || result.display_name;
+        main.appendChild(nameLine);
+
+        if (result.address) {
+          const addressLine = document.createElement("div");
+          addressLine.className = "special-place-address";
+          addressLine.textContent = result.address;
+          main.appendChild(addressLine);
+        }
+      } else {
+        main.textContent =
+          result.display_name || result.name || "Search result";
+      }
 
       button.appendChild(main);
 
-      if (preferred) {
+      if (sourceType === "stake" || sourceType === "special") {
         const badge = document.createElement("span");
         badge.className = "stake-result-badge";
-        badge.textContent = "Stake address";
+        badge.textContent =
+          sourceType === "special"
+            ? (result.location_type || "Stake place")
+            : "Stake address";
         button.appendChild(badge);
       }
 
@@ -1321,7 +1512,10 @@
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
       const latLng = new google.maps.LatLng(lat, lng);
-      const label = result.display_name || result.name || "Selected location";
+      const label =
+        result.source === "special"
+          ? [result.name, result.address].filter(Boolean).join(" — ")
+          : (result.display_name || result.name || "Selected location");
       const input = document.getElementById("placeSearch");
 
       input.value = label;
