@@ -221,6 +221,7 @@
     let map;
     let infoWindow;
     let stakeBounds;
+    let snowCanyonBounds;
     let loadedWardCount = 0;
 
     /*
@@ -291,14 +292,14 @@
 
       infoWindow = new google.maps.InfoWindow();
       stakeBounds = new google.maps.LatLngBounds();
+      snowCanyonBounds = new google.maps.LatLngBounds();
 
       buildLayerControl();
 
       wards.forEach((ward) => loadWardLayer(ward));
 
       document.getElementById("zoomStake").addEventListener("click", () => {
-        if (!stakeBounds || stakeBounds.isEmpty()) return;
-        map.fitBounds(stakeBounds, 35);
+        zoomToStake();
       });
 
       // Clicking the map closes a ward popup.
@@ -460,6 +461,11 @@
 
           features.forEach((feature) => {
             extendBoundsFromGeometry(feature.getGeometry(), stakeBounds);
+
+            // Snow Canyon defines the outer extent of the stake.
+            if (ward.id === "snowCanyon") {
+              extendBoundsFromGeometry(feature.getGeometry(), snowCanyonBounds);
+            }
           });
 
           loadedWardCount += 1;
@@ -470,40 +476,42 @@
 
           updateStatus();
 
-          // Re-fit as files finish loading. This makes the map work even
-          // if some ward files load more slowly than others.
-          if (!stakeBounds.isEmpty()) {
-            map.fitBounds(stakeBounds, 35);
+          // Snow Canyon represents the stake's full geographic extent,
+          // so use it as the authoritative stake view whenever it loads.
+          if (ward.id === "snowCanyon" && !snowCanyonBounds.isEmpty()) {
+            zoomToStake();
           }
         }
       );
     }
 
+    function zoomToStake() {
+      if (!map) return;
+
+      // Primary source: Snow Canyon's boundary, which matches the stake extent.
+      if (snowCanyonBounds && !snowCanyonBounds.isEmpty()) {
+        map.fitBounds(snowCanyonBounds, 35);
+        return;
+      }
+
+      // Fallback in case the Snow Canyon file has not finished loading yet.
+      if (stakeBounds && !stakeBounds.isEmpty()) {
+        map.fitBounds(stakeBounds, 35);
+      }
+    }
+
     function extendBoundsFromGeometry(geometry, bounds) {
-      if (!geometry) return;
+      if (!geometry || !bounds) return;
 
-      const type = geometry.getType();
-
-      if (type === "Point") {
-        bounds.extend(geometry.get());
-        return;
-      }
-
-      if (type === "MultiPoint" || type === "LineString") {
-        geometry.getArray().forEach((latLng) => bounds.extend(latLng));
-        return;
-      }
-
-      if (
-        type === "MultiLineString" ||
-        type === "Polygon" ||
-        type === "MultiPolygon" ||
-        type === "GeometryCollection"
-      ) {
-        geometry.getArray().forEach((part) => {
-          extendBoundsFromGeometry(part, bounds);
-        });
-      }
+      /*
+        Google Maps Data geometries provide forEachLatLng(), which safely
+        traverses Polygon, MultiPolygon, LinearRing, and other nested
+        geometry types. This is more reliable than manually checking
+        geometry.getType() for every possible nested type.
+      */
+      geometry.forEachLatLng((latLng) => {
+        bounds.extend(latLng);
+      });
     }
 
     function updateStatus() {
