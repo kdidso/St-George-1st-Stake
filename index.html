@@ -996,30 +996,85 @@
         "locdesc", "LocDesc", "LOCDESC"
       ];
 
+      let baseAddress = "";
+
       for (const field of preferredFields) {
         const value = properties[field];
         if (value !== undefined && value !== null && String(value).trim()) {
-          return String(value).trim();
+          baseAddress = String(value).trim();
+          break;
         }
       }
 
-      // If the exact schema changes, look for a property whose key itself
-      // clearly represents an address, but never fall back to a person's name.
-      for (const [key, value] of Object.entries(properties)) {
-        const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-        if (
-          (normalizedKey.includes("address") ||
-           normalizedKey === "fulladdr" ||
-           normalizedKey === "locdesc") &&
-          value !== undefined &&
-          value !== null &&
-          String(value).trim()
-        ) {
-          return String(value).trim();
+      if (!baseAddress) {
+        // If the exact schema changes, look for a property whose key itself
+        // clearly represents an address, but never fall back to a person's name.
+        for (const [key, value] of Object.entries(properties)) {
+          const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+          if (
+            (normalizedKey.includes("address") ||
+             normalizedKey === "fulladdr" ||
+             normalizedKey === "locdesc") &&
+            value !== undefined &&
+            value !== null &&
+            String(value).trim()
+          ) {
+            baseAddress = String(value).trim();
+            break;
+          }
         }
       }
 
-      return "";
+      if (!baseAddress) return "";
+
+      // If a separate apartment/unit field exists, include it so otherwise
+      // identical complex addresses can remain distinct.
+      const unitFields = [
+        "unit", "Unit", "UNIT",
+        "apt", "Apt", "APT",
+        "apartment", "Apartment", "APARTMENT",
+        "unit_number", "Unit_Number", "UNIT_NUMBER",
+        "unitnumber", "UnitNumber",
+        "apt_number", "Apt_Number", "APT_NUMBER"
+      ];
+
+      let unitValue = "";
+
+      for (const field of unitFields) {
+        const value = properties[field];
+        if (value !== undefined && value !== null && String(value).trim()) {
+          unitValue = String(value).trim();
+          break;
+        }
+      }
+
+      if (!unitValue) {
+        for (const [key, value] of Object.entries(properties)) {
+          const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+          if (
+            ["unit", "unitnumber", "apt", "aptnumber", "apartment"].includes(normalizedKey) &&
+            value !== undefined &&
+            value !== null &&
+            String(value).trim()
+          ) {
+            unitValue = String(value).trim();
+            break;
+          }
+        }
+      }
+
+      if (unitValue) {
+        // Avoid appending the unit twice when it is already part of the address.
+        const normalizedBase = baseAddress.toLowerCase();
+        const normalizedUnit = unitValue.toLowerCase();
+
+        if (!normalizedBase.includes(normalizedUnit)) {
+          const prefix = /^(apt|apartment|unit|#)/i.test(unitValue) ? "" : "Unit ";
+          return baseAddress + ", " + prefix + unitValue;
+        }
+      }
+
+      return baseAddress;
     }
 
     function normalizeSearchText(value) {
@@ -1076,13 +1131,29 @@
         return { ...record, score };
       });
 
-      return scored
+      const sorted = scored
         .filter((record) => record.score > 0)
         .sort((a, b) =>
           b.score - a.score ||
           a.display_name.localeCompare(b.display_name)
-        )
-        .slice(0, limit);
+        );
+
+      // Remove duplicate address rows. If unit/apartment information exists,
+      // extractAddressFromProperties() makes those distinct before this step.
+      const seen = new Set();
+      const unique = [];
+
+      for (const record of sorted) {
+        const key = normalizeSearchText(record.display_name);
+        if (seen.has(key)) continue;
+
+        seen.add(key);
+        unique.push(record);
+
+        if (unique.length >= limit) break;
+      }
+
+      return unique;
     }
 
     async function runLocationSearch(query) {
