@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>St. George YSA 1st Stake Ward Boundaries</title>
+
+  <style>
+    html, body, #map {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+    }
+
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      overflow: hidden;
+    }
+
+    #map {
+      background: #e5e7eb;
+    }
+
+    /* ---------- Title ---------- */
+    .map-title {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 5;
+      background: rgba(255,255,255,0.94);
+      border: 1px solid rgba(0,0,0,0.16);
+      border-radius: 8px;
+      padding: 9px 15px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.20);
+      font-size: 18px;
+      font-weight: 700;
+      color: #202124;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    /* ---------- Layer control ---------- */
+    .layer-panel {
+      position: absolute;
+      top: 72px;
+      right: 12px;
+      z-index: 5;
+      width: 255px;
+      max-height: calc(100vh - 100px);
+      overflow-y: auto;
+      background: rgba(255,255,255,0.96);
+      border: 1px solid rgba(0,0,0,0.18);
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.24);
+      color: #202124;
+      user-select: none;
+    }
+
+    .group-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 12px;
+      cursor: pointer;
+      font-weight: 700;
+      border-bottom: 1px solid #e6e6e6;
+    }
+
+    .group-header:hover {
+      background: #f7f7f7;
+    }
+
+    .arrow {
+      width: 14px;
+      display: inline-block;
+      transition: transform 0.18s ease;
+      font-size: 13px;
+    }
+
+    .arrow.collapsed {
+      transform: rotate(-90deg);
+    }
+
+    .group-toggle {
+      margin: 0;
+    }
+
+    .ward-list {
+      padding: 4px 0 7px;
+    }
+
+    .ward-list.collapsed {
+      display: none;
+    }
+
+    .ward-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 7px 12px 7px 31px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .ward-row:hover {
+      background: #f6f7f8;
+    }
+
+    .ward-row input {
+      margin: 0;
+      flex: 0 0 auto;
+    }
+
+    .swatch {
+      width: 16px;
+      height: 16px;
+      border-radius: 3px;
+      border: 2px solid rgba(0,0,0,0.40);
+      flex: 0 0 auto;
+    }
+
+    .ward-name {
+      line-height: 1.25;
+    }
+
+    .panel-footer {
+      border-top: 1px solid #e6e6e6;
+      padding: 9px 10px 10px;
+    }
+
+    #zoomStake {
+      width: 100%;
+      border: 1px solid #b8b8b8;
+      border-radius: 5px;
+      background: #fff;
+      padding: 7px 8px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    #zoomStake:hover {
+      background: #f4f4f4;
+    }
+
+    /* ---------- Status ---------- */
+    .status-box {
+      position: absolute;
+      left: 12px;
+      bottom: 28px;
+      z-index: 5;
+      background: rgba(255,255,255,0.94);
+      border: 1px solid rgba(0,0,0,0.16);
+      border-radius: 6px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.18);
+      padding: 7px 10px;
+      font-size: 12px;
+      color: #444;
+      max-width: 320px;
+    }
+
+    .status-error {
+      color: #a61b1b;
+      font-weight: 700;
+    }
+
+    @media (max-width: 650px) {
+      .map-title {
+        top: 8px;
+        max-width: calc(100vw - 24px);
+        font-size: 15px;
+        padding: 8px 11px;
+        white-space: normal;
+        text-align: center;
+      }
+
+      .layer-panel {
+        top: 65px;
+        right: 8px;
+        width: 220px;
+        max-height: calc(100vh - 95px);
+      }
+
+      .ward-row {
+        padding-left: 24px;
+        font-size: 13px;
+      }
+
+      .status-box {
+        left: 8px;
+        bottom: 22px;
+        max-width: calc(100vw - 236px);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="map"></div>
+
+  <div class="map-title">St. George YSA 1st Stake Ward Boundaries</div>
+
+  <div class="layer-panel">
+    <div class="group-header" id="wardsHeader" title="Expand or collapse ward layers">
+      <span class="arrow" id="wardsArrow">▼</span>
+      <input type="checkbox" id="allWardsToggle" class="group-toggle" checked
+             title="Turn all wards on or off" />
+      <span>Wards</span>
+    </div>
+
+    <div id="wardList" class="ward-list"></div>
+
+    <div class="panel-footer">
+      <button id="zoomStake" type="button">Zoom to Stake</button>
+    </div>
+  </div>
+
+  <div class="status-box" id="statusBox">Loading ward boundaries…</div>
+
+  <script>
+    let map;
+    let infoWindow;
+    let stakeBounds;
+    let loadedWardCount = 0;
+
+    /*
+      Each ward is its own Google Maps Data layer, even though the layer
+      control presents all of them under one expandable "Wards" group.
+    */
+    const wards = [
+      {
+        id: "greenValley",
+        name: "Green Valley YSA Ward",
+        file: "Green_Valley_FeaturesToJSON.geojson",
+        color: "#1976D2"
+      },
+      {
+        id: "heights",
+        name: "Heights YSA Ward",
+        file: "Heights_Ward_FeaturesToJSON.geojson",
+        color: "#D32F2F"
+      },
+      {
+        id: "ivins",
+        name: "Ivins YSA Ward",
+        file: "Ivins_Ward_FeaturesToJSON.geojson",
+        color: "#7B1FA2"
+      },
+      {
+        id: "santaClara",
+        name: "Santa Clara YSA Ward",
+        file: "Santa_Clara_Ward_FeaturesToJSON.geojson",
+        color: "#F57C00"
+      },
+      {
+        id: "snowCanyon",
+        name: "Snow Canyon YSA Ward",
+        file: "Snow_Canyon_ward_FeaturesToJSON.geojson",
+        color: "#00897B"
+      },
+      {
+        id: "southGate",
+        name: "Southgate YSA Ward",
+        file: "South_Gate_Ward_FeaturesToJSON.geojson",
+        color: "#C2185B"
+      },
+      {
+        id: "stGeorge1st",
+        name: "St. George YSA Ward",
+        file: "St_George_1st_Ward_FeaturesToJSON.geojson",
+        color: "#5D4037"
+      },
+      {
+        id: "stGeorge3rd",
+        name: "Washington YSA Ward",
+        file: "St_George_3rd_ward_FeaturesToJSON.geojson",
+        color: "#455A64"
+      }
+    ];
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById("map"), {
+        center: { lat: 37.12, lng: -113.58 },
+        zoom: 11,
+        mapTypeId: "roadmap",
+        mapTypeControl: true,
+        streetViewControl: false,
+        fullscreenControl: true,
+        gestureHandling: "greedy"
+      });
+
+      infoWindow = new google.maps.InfoWindow();
+      stakeBounds = new google.maps.LatLngBounds();
+
+      buildLayerControl();
+
+      wards.forEach((ward) => loadWardLayer(ward));
+
+      document.getElementById("zoomStake").addEventListener("click", () => {
+        if (!stakeBounds || stakeBounds.isEmpty()) return;
+        map.fitBounds(stakeBounds, 35);
+      });
+
+      // Clicking the map closes a ward popup.
+      map.addListener("click", () => infoWindow.close());
+    }
+
+    function buildLayerControl() {
+      const list = document.getElementById("wardList");
+
+      wards.forEach((ward) => {
+        const row = document.createElement("label");
+        row.className = "ward-row";
+        row.htmlFor = "toggle-" + ward.id;
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = true;
+        checkbox.id = "toggle-" + ward.id;
+
+        const swatch = document.createElement("span");
+        swatch.className = "swatch";
+        swatch.style.background = hexToRgba(ward.color, 0.32);
+        swatch.style.borderColor = ward.color;
+
+        const name = document.createElement("span");
+        name.className = "ward-name";
+        name.textContent = ward.name;
+
+        checkbox.addEventListener("change", () => {
+          ward.visible = checkbox.checked;
+          if (ward.layer) {
+            ward.layer.setMap(ward.visible ? map : null);
+          }
+          updateMasterCheckbox();
+        });
+
+        row.appendChild(checkbox);
+        row.appendChild(swatch);
+        row.appendChild(name);
+        list.appendChild(row);
+
+        ward.checkbox = checkbox;
+        ward.visible = true;
+      });
+
+      const header = document.getElementById("wardsHeader");
+      const listEl = document.getElementById("wardList");
+      const arrow = document.getElementById("wardsArrow");
+      const master = document.getElementById("allWardsToggle");
+
+      header.addEventListener("click", (event) => {
+        // The checkbox itself controls visibility; clicking elsewhere
+        // on the header expands/collapses the group.
+        if (event.target === master) return;
+
+        listEl.classList.toggle("collapsed");
+        arrow.classList.toggle("collapsed");
+      });
+
+      master.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+
+      master.addEventListener("change", () => {
+        wards.forEach((ward) => {
+          ward.visible = master.checked;
+          ward.checkbox.checked = master.checked;
+          if (ward.layer) {
+            ward.layer.setMap(master.checked ? map : null);
+          }
+        });
+        master.indeterminate = false;
+      });
+    }
+
+    function updateMasterCheckbox() {
+      const master = document.getElementById("allWardsToggle");
+      const checkedCount = wards.filter((ward) => ward.checkbox.checked).length;
+
+      master.checked = checkedCount === wards.length;
+      master.indeterminate = checkedCount > 0 && checkedCount < wards.length;
+    }
+
+    function loadWardLayer(ward) {
+      const layer = new google.maps.Data();
+      ward.layer = layer;
+
+      layer.setStyle(() => ({
+        fillColor: ward.color,
+        fillOpacity: 0.28,
+        strokeColor: ward.color,
+        strokeOpacity: 0.95,
+        strokeWeight: 2,
+        clickable: true
+      }));
+
+      layer.addListener("mouseover", (event) => {
+        layer.overrideStyle(event.feature, {
+          fillOpacity: 0.42,
+          strokeWeight: 3
+        });
+      });
+
+      layer.addListener("mouseout", () => {
+        layer.revertStyle();
+      });
+
+      layer.addListener("click", (event) => {
+        infoWindow.setContent(
+          '<div style="font-family:Arial,sans-serif;padding:2px 2px 1px;">' +
+          '<strong>' + escapeHtml(ward.name) + '</strong>' +
+          '</div>'
+        );
+        infoWindow.setPosition(event.latLng);
+        infoWindow.open(map);
+      });
+
+      layer.loadGeoJson(
+        ward.file,
+        null,
+        (features) => {
+          if (!features || features.length === 0) {
+            showLoadError(ward, "No features found");
+            return;
+          }
+
+          features.forEach((feature) => {
+            extendBoundsFromGeometry(feature.getGeometry(), stakeBounds);
+          });
+
+          loadedWardCount += 1;
+
+          if (ward.visible) {
+            layer.setMap(map);
+          }
+
+          updateStatus();
+
+          // Re-fit as files finish loading. This makes the map work even
+          // if some ward files load more slowly than others.
+          if (!stakeBounds.isEmpty()) {
+            map.fitBounds(stakeBounds, 35);
+          }
+        }
+      );
+    }
+
+    function extendBoundsFromGeometry(geometry, bounds) {
+      if (!geometry) return;
+
+      const type = geometry.getType();
+
+      if (type === "Point") {
+        bounds.extend(geometry.get());
+        return;
+      }
+
+      if (type === "MultiPoint" || type === "LineString") {
+        geometry.getArray().forEach((latLng) => bounds.extend(latLng));
+        return;
+      }
+
+      if (
+        type === "MultiLineString" ||
+        type === "Polygon" ||
+        type === "MultiPolygon" ||
+        type === "GeometryCollection"
+      ) {
+        geometry.getArray().forEach((part) => {
+          extendBoundsFromGeometry(part, bounds);
+        });
+      }
+    }
+
+    function updateStatus() {
+      const status = document.getElementById("statusBox");
+
+      if (loadedWardCount === wards.length) {
+        status.textContent = "All ward boundaries loaded.";
+        setTimeout(() => {
+          status.style.display = "none";
+        }, 1600);
+      } else {
+        status.textContent =
+          "Loaded " + loadedWardCount + " of " + wards.length + " ward layers…";
+      }
+    }
+
+    function showLoadError(ward, detail) {
+      const status = document.getElementById("statusBox");
+      status.style.display = "block";
+      status.innerHTML =
+        '<span class="status-error">Could not load ' +
+        escapeHtml(ward.file) +
+        '.</span> ' +
+        escapeHtml(detail || "");
+    }
+
+    function hexToRgba(hex, alpha) {
+      const clean = hex.replace("#", "");
+      const r = parseInt(clean.substring(0, 2), 16);
+      const g = parseInt(clean.substring(2, 4), 16);
+      const b = parseInt(clean.substring(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    window.initMap = initMap;
+  </script>
+
+  <!--
+    Uses the same Google Maps JavaScript setup/API key pattern as your
+    existing Google Maps pages. If you later restrict this API key by
+    HTTP referrer, add the new GitHub Pages domain/repository path there.
+  -->
+  <script async
+    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBLQdEBPkVAA460UQu0tla8lJuOJQew_Tc&callback=initMap">
+  </script>
+</body>
+</html>
