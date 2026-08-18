@@ -234,6 +234,44 @@
       outline: none;
     }
 
+
+    .search-section-label {
+      padding: 7px 11px 5px;
+      background: #f5f6f7;
+      border-bottom: 1px solid #e7e7e7;
+      color: #5f6368;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .preferred-search-result {
+      position: relative;
+      padding-right: 92px;
+      background: #fbfdff;
+    }
+
+    .search-result-main {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stake-result-badge {
+      position: absolute;
+      top: 50%;
+      right: 9px;
+      transform: translateY(-50%);
+      padding: 3px 5px;
+      border: 1px solid #c5d8ec;
+      border-radius: 4px;
+      background: #edf5fc;
+      color: #315f87;
+      font-size: 9px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
     .search-message {
       padding: 10px 11px;
       color: #666;
@@ -501,6 +539,15 @@
     // Browser token restricted in LocationIQ to the user's GitHub Pages domain.
     const LOCATIONIQ_TOKEN = "pk.d447414bd6ee111b4987d8c82289fca3";
 
+    // Prefer known stake/member-address coordinates from the existing
+    // Snow Canyon map, while still using LocationIQ for general search.
+    const STAKE_ADDRESS_GEOJSON_URL =
+      "https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson";
+
+    let stakeAddressRecords = [];
+    let stakeAddressDataLoaded = false;
+
+
 
     /*
       Each ward is its own Google Maps Data layer, even though the layer
@@ -582,6 +629,7 @@
 
       buildLayerControl();
       initPlaceSearch();
+      loadStakeAddressData();
 
       wards.forEach((ward) => loadWardLayer(ward));
 
@@ -870,14 +918,186 @@
       });
     }
 
+    async function loadStakeAddressData() {
+      try {
+        const response = await fetch(STAKE_ADDRESS_GEOJSON_URL);
+        if (!response.ok) {
+          throw new Error("Stake address file returned " + response.status);
+        }
+
+        const geojson = await response.json();
+        const features = Array.isArray(geojson.features) ? geojson.features : [];
+
+        stakeAddressRecords = features
+          .map((feature, index) => {
+            const coords = getPointCoordinates(feature.geometry);
+            if (!coords) return null;
+
+            const address = extractAddressFromProperties(feature.properties || {});
+            if (!address) return null;
+
+            return {
+              id: "stake-" + index,
+              display_name: address,
+              lat: String(coords.lat),
+              lon: String(coords.lng),
+              source: "stake"
+            };
+          })
+          .filter(Boolean);
+
+        stakeAddressDataLoaded = true;
+        console.log(
+          "Loaded " + stakeAddressRecords.length +
+          " searchable stake address locations."
+        );
+      } catch (error) {
+        // General LocationIQ search still works if this file is unavailable.
+        stakeAddressDataLoaded = false;
+        stakeAddressRecords = [];
+        console.warn("Could not load stake address search data:", error);
+      }
+    }
+
+    function getPointCoordinates(geometry) {
+      if (!geometry || !geometry.coordinates) return null;
+
+      if (geometry.type === "Point") {
+        const [lng, lat] = geometry.coordinates;
+        if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+          return { lat: Number(lat), lng: Number(lng) };
+        }
+      }
+
+      // Graceful fallback if a record happens to be a MultiPoint.
+      if (geometry.type === "MultiPoint" &&
+          Array.isArray(geometry.coordinates) &&
+          geometry.coordinates.length > 0) {
+        const [lng, lat] = geometry.coordinates[0];
+        if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+          return { lat: Number(lat), lng: Number(lng) };
+        }
+      }
+
+      return null;
+    }
+
+    function extractAddressFromProperties(properties) {
+      /*
+        Only address-like fields are used here. Names and other member
+        attributes are intentionally ignored.
+      */
+      const preferredFields = [
+        "address", "Address", "ADDRESS",
+        "full_address", "Full_Address", "FULL_ADDRESS",
+        "fulladdr", "FullAddr", "FULLADDR",
+        "street_address", "Street_Address", "STREET_ADDRESS",
+        "streetaddress", "StreetAddress",
+        "locdesc", "LocDesc", "LOCDESC"
+      ];
+
+      for (const field of preferredFields) {
+        const value = properties[field];
+        if (value !== undefined && value !== null && String(value).trim()) {
+          return String(value).trim();
+        }
+      }
+
+      // If the exact schema changes, look for a property whose key itself
+      // clearly represents an address, but never fall back to a person's name.
+      for (const [key, value] of Object.entries(properties)) {
+        const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (
+          (normalizedKey.includes("address") ||
+           normalizedKey === "fulladdr" ||
+           normalizedKey === "locdesc") &&
+          value !== undefined &&
+          value !== null &&
+          String(value).trim()
+        ) {
+          return String(value).trim();
+        }
+      }
+
+      return "";
+    }
+
+    function normalizeSearchText(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/[.,#]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function getStakeAddressMatches(query, limit = 6) {
+      if (!stakeAddressDataLoaded || !query) return [];
+
+      const normalizedQuery = normalizeSearchText(query);
+      if (normalizedQuery.length < 2) return [];
+
+      const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+
+      const scored = stakeAddressRecords.map((record) => {
+        const address = normalizeSearchText(record.display_name);
+        let score = 0;
+
+        // Strongest preference: the entered text is the beginning of the address.
+        if (address.startsWith(normalizedQuery)) {
+          score += 1000;
+        } else if (address.includes(normalizedQuery)) {
+          score += 650;
+        }
+
+        // Also handle partial entry such as "123 red" against
+        // "123 Red Cliffs Dr ..." and other token-by-token beginnings.
+        const addressTokens = address.split(" ");
+        let tokenMatches = 0;
+
+        queryTokens.forEach((queryToken, index) => {
+          const samePosition = addressTokens[index];
+          if (samePosition && samePosition.startsWith(queryToken)) {
+            score += 120;
+            tokenMatches += 1;
+            return;
+          }
+
+          if (addressTokens.some((token) => token.startsWith(queryToken))) {
+            score += 45;
+            tokenMatches += 1;
+          }
+        });
+
+        // Prefer results where every entered token matched.
+        if (tokenMatches === queryTokens.length) {
+          score += 200;
+        }
+
+        return { ...record, score };
+      });
+
+      return scored
+        .filter((record) => record.score > 0)
+        .sort((a, b) =>
+          b.score - a.score ||
+          a.display_name.localeCompare(b.display_name)
+        )
+        .slice(0, limit);
+    }
+
     async function runLocationSearch(query) {
       const resultsBox = document.getElementById("searchResults");
+      const localResults = getStakeAddressMatches(query, 6);
 
       if (activeSearchController) {
         activeSearchController.abort();
       }
 
       activeSearchController = new AbortController();
+
+      // Show known stake-address matches immediately while the broader
+      // LocationIQ request is still running.
+      renderHybridSearchResults(localResults, [], true);
 
       const params = new URLSearchParams({
         key: LOCATIONIQ_TOKEN,
@@ -889,10 +1109,6 @@
         "accept-language": "en"
       });
 
-      /*
-        Bias results toward the actual stake extent without preventing
-        someone from searching elsewhere in the United States.
-      */
       if (snowCanyonBounds && !snowCanyonBounds.isEmpty()) {
         const sw = snowCanyonBounds.getSouthWest();
         const ne = snowCanyonBounds.getNorthEast();
@@ -903,10 +1119,6 @@
         params.set("bounded", "0");
         params.set("importancesort", "0");
       }
-
-      resultsBox.innerHTML =
-        '<div class="search-message">Searching…</div>';
-      resultsBox.style.display = "block";
 
       try {
         const response = await fetch(
@@ -919,51 +1131,116 @@
         }
 
         const results = await response.json();
-        renderSearchResults(Array.isArray(results) ? results : []);
+        renderHybridSearchResults(
+          localResults,
+          Array.isArray(results) ? results : [],
+          false
+        );
       } catch (error) {
         if (error.name === "AbortError") return;
 
-        resultsBox.innerHTML =
-          '<div class="search-message">Search is temporarily unavailable.</div>' +
-          locationIqAttribution();
-        resultsBox.style.display = "block";
+        // Keep the stake-address matches usable even if LocationIQ is down.
+        renderHybridSearchResults(localResults, [], false, true);
         console.error("LocationIQ search error:", error);
       }
     }
 
-    function renderSearchResults(results) {
+    function renderHybridSearchResults(
+      localResults,
+      locationIqResults,
+      loadingLocationIq = false,
+      locationIqFailed = false
+    ) {
       const resultsBox = document.getElementById("searchResults");
       resultsBox.innerHTML = "";
 
-      if (results.length === 0) {
-        resultsBox.innerHTML =
-          '<div class="search-message">No matching places found.</div>' +
-          locationIqAttribution();
-        resultsBox.style.display = "block";
-        return;
+      if (localResults.length > 0) {
+        addSearchSectionLabel(resultsBox, "Stake addresses");
+
+        localResults.forEach((result) => {
+          resultsBox.appendChild(
+            createSearchResultButton(result, true)
+          );
+        });
       }
 
-      results.forEach((result) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "search-result";
-        button.setAttribute("role", "option");
-        button.textContent = result.display_name || result.name || "Search result";
+      if (loadingLocationIq) {
+        addSearchSectionLabel(resultsBox, "Other places");
+        const loading = document.createElement("div");
+        loading.className = "search-message";
+        loading.textContent = "Searching other addresses and places…";
+        resultsBox.appendChild(loading);
+      } else if (locationIqResults.length > 0) {
+        addSearchSectionLabel(resultsBox, "Other addresses & places");
 
-        button.addEventListener("click", () => {
-          selectSearchResult(result);
+        locationIqResults.forEach((result) => {
+          resultsBox.appendChild(
+            createSearchResultButton(result, false)
+          );
         });
 
-        resultsBox.appendChild(button);
-      });
+        const attribution = document.createElement("div");
+        attribution.className = "search-attribution";
+        attribution.innerHTML =
+          'Search by <a href="https://locationiq.com/" target="_blank" rel="noopener">LocationIQ</a>';
+        resultsBox.appendChild(attribution);
+      } else if (locationIqFailed) {
+        const message = document.createElement("div");
+        message.className = "search-message";
+        message.textContent =
+          localResults.length > 0
+            ? "Broader place search is temporarily unavailable."
+            : "Search is temporarily unavailable.";
+        resultsBox.appendChild(message);
+      } else if (localResults.length === 0) {
+        const message = document.createElement("div");
+        message.className = "search-message";
+        message.textContent = "No matching places found.";
+        resultsBox.appendChild(message);
 
-      const attribution = document.createElement("div");
-      attribution.className = "search-attribution";
-      attribution.innerHTML =
-        'Search by <a href="https://locationiq.com/" target="_blank" rel="noopener">LocationIQ</a>';
-      resultsBox.appendChild(attribution);
+        const attribution = document.createElement("div");
+        attribution.className = "search-attribution";
+        attribution.innerHTML =
+          'Search by <a href="https://locationiq.com/" target="_blank" rel="noopener">LocationIQ</a>';
+        resultsBox.appendChild(attribution);
+      }
 
       resultsBox.style.display = "block";
+    }
+
+    function addSearchSectionLabel(container, text) {
+      const label = document.createElement("div");
+      label.className = "search-section-label";
+      label.textContent = text;
+      container.appendChild(label);
+    }
+
+    function createSearchResultButton(result, preferred) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className =
+        "search-result" + (preferred ? " preferred-search-result" : "");
+      button.setAttribute("role", "option");
+
+      const main = document.createElement("div");
+      main.className = "search-result-main";
+      main.textContent =
+        result.display_name || result.name || "Search result";
+
+      button.appendChild(main);
+
+      if (preferred) {
+        const badge = document.createElement("span");
+        badge.className = "stake-result-badge";
+        badge.textContent = "Stake address";
+        button.appendChild(badge);
+      }
+
+      button.addEventListener("click", () => {
+        selectSearchResult(result);
+      });
+
+      return button;
     }
 
     function selectSearchResult(result) {
