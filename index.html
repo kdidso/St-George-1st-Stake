@@ -266,13 +266,13 @@
       },
       {
         id: "stGeorge1st",
-        name: "St. George YSA Ward",
-        file: "St_George_1st_Ward_FeaturesToJSON.geojson",
+        name: "St. George 1st YSA Ward",
+        file: "St_George_1st_ward_FeaturesToJSON.geojson",
         color: "#5D4037"
       },
       {
         id: "stGeorge3rd",
-        name: "Washington YSA Ward",
+        name: "St. George 3rd YSA Ward",
         file: "St_George_3rd_ward_FeaturesToJSON.geojson",
         color: "#455A64"
       }
@@ -333,6 +333,7 @@
             ward.layer.setMap(ward.visible ? map : null);
           }
           updateMasterCheckbox();
+          refreshWardStyles();
         });
 
         row.appendChild(checkbox);
@@ -371,6 +372,41 @@
           }
         });
         master.indeterminate = false;
+        refreshWardStyles();
+      });
+    }
+
+    function getVisibleWardCount() {
+      return wards.filter((ward) => ward.visible).length;
+    }
+
+    function getWardStyle(ward) {
+      const visibleCount = getVisibleWardCount();
+
+      /*
+        Snow Canyon contains geometry that can visually cover other ward
+        polygons. When more than one ward is visible, show Snow Canyon as
+        outline-only. When Snow Canyon is the only visible ward, restore
+        its translucent fill so the Google basemap remains visible.
+      */
+      const snowCanyonOutlineOnly =
+        ward.id === "snowCanyon" && visibleCount > 1;
+
+      return {
+        fillColor: ward.color,
+        fillOpacity: snowCanyonOutlineOnly ? 0 : 0.28,
+        strokeColor: ward.color,
+        strokeOpacity: 0.95,
+        strokeWeight: ward.id === "snowCanyon" && visibleCount > 1 ? 3 : 2,
+        clickable: true
+      };
+    }
+
+    function refreshWardStyles() {
+      wards.forEach((ward) => {
+        if (ward.layer) {
+          ward.layer.setStyle(() => getWardStyle(ward));
+        }
       });
     }
 
@@ -386,18 +422,15 @@
       const layer = new google.maps.Data();
       ward.layer = layer;
 
-      layer.setStyle(() => ({
-        fillColor: ward.color,
-        fillOpacity: 0.28,
-        strokeColor: ward.color,
-        strokeOpacity: 0.95,
-        strokeWeight: 2,
-        clickable: true
-      }));
+      layer.setStyle(() => getWardStyle(ward));
 
       layer.addListener("mouseover", (event) => {
+        const visibleCount = getVisibleWardCount();
+        const snowCanyonOutlineOnly =
+          ward.id === "snowCanyon" && visibleCount > 1;
+
         layer.overrideStyle(event.feature, {
-          fillOpacity: 0.42,
+          fillOpacity: snowCanyonOutlineOnly ? 0 : 0.42,
           strokeWeight: 3
         });
       });
