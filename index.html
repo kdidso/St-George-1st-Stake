@@ -323,48 +323,56 @@
       {
         id: "greenValley",
         name: "Green Valley YSA Ward",
+        ageGroup: "18-25",
         file: "Green_Valley_FeaturesToJSON.geojson",
         color: "#1976D2"
       },
       {
         id: "heights",
         name: "Heights YSA Ward",
+        ageGroup: "18-25",
         file: "Heights_Ward_FeaturesToJSON.geojson",
         color: "#E65100"
       },
       {
         id: "ivins",
         name: "Ivins YSA Ward",
+        ageGroup: "18-25",
         file: "Ivins_Ward_FeaturesToJSON.geojson",
         color: "#7B1FA2"
       },
       {
         id: "santaClara",
         name: "Santa Clara YSA Ward",
+        ageGroup: "18-25",
         file: "Santa_Clara_Ward_FeaturesToJSON.geojson",
         color: "#F9A825"
       },
       {
         id: "snowCanyon",
         name: "Snow Canyon YSA Ward",
+        ageGroup: "26-35",
         file: "Snow_Canyon_ward_FeaturesToJSON.geojson",
         color: "#00897B"
       },
       {
         id: "southGate",
         name: "Southgate YSA Ward",
+        ageGroup: "18-25",
         file: "South_Gate_Ward_FeaturesToJSON.geojson",
         color: "#D81B60"
       },
       {
         id: "stGeorge1st",
         name: "St. George 1st YSA Ward",
+        ageGroup: "18-25",
         file: "St_George_1st_ward_FeaturesToJSON.geojson",
         color: "#388E3C"
       },
       {
         id: "stGeorge3rd",
         name: "St. George 3rd YSA Ward",
+        ageGroup: "18-25",
         file: "St_George_3rd_ward_FeaturesToJSON.geojson",
         color: "#0097A7"
       }
@@ -532,13 +540,7 @@
       });
 
       layer.addListener("click", (event) => {
-        infoWindow.setContent(
-          '<div style="font-family:Arial,sans-serif;padding:2px 2px 1px;">' +
-          '<strong>' + escapeHtml(ward.name) + '</strong>' +
-          '</div>'
-        );
-        infoWindow.setPosition(event.latLng);
-        infoWindow.open(map);
+        showWardsAtLocation(event.latLng);
       });
 
       layer.loadGeoJson(
@@ -603,6 +605,120 @@
       geometry.forEachLatLng((latLng) => {
         bounds.extend(latLng);
       });
+    }
+
+    function showWardsAtLocation(latLng) {
+      const matches = getWardsAtLocation(latLng);
+
+      if (matches.length === 0) {
+        infoWindow.close();
+        return;
+      }
+
+      matches.sort((a, b) => {
+        if (a.id === "snowCanyon") return -1;
+        if (b.id === "snowCanyon") return 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      const rows = matches.map((matchedWard) => (
+        '<div style="display:flex;align-items:center;gap:7px;margin-top:7px;">' +
+          '<span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
+            'background:' + matchedWard.color + ';border:1px solid rgba(0,0,0,.35);"></span>' +
+          '<div><strong>' + escapeHtml(matchedWard.name) + '</strong>' +
+            '<span style="color:#666;margin-left:5px;">(' +
+              escapeHtml(matchedWard.ageGroup) + ')</span></div>' +
+        '</div>'
+      )).join("");
+
+      infoWindow.setContent(
+        '<div style="font-family:Arial,sans-serif;min-width:210px;padding:2px 3px 4px;">' +
+          '<div style="font-size:14px;font-weight:700;">Wards at this location</div>' +
+          rows +
+        '</div>'
+      );
+
+      infoWindow.setPosition(latLng);
+      infoWindow.open(map);
+    }
+
+    function getWardsAtLocation(latLng) {
+      return wards.filter((ward) => {
+        if (!ward.layer) return false;
+
+        let containsPoint = false;
+        ward.layer.forEach((feature) => {
+          if (!containsPoint &&
+              geometryContainsLatLng(feature.getGeometry(), latLng)) {
+            containsPoint = true;
+          }
+        });
+
+        return containsPoint;
+      });
+    }
+
+    function geometryContainsLatLng(geometry, latLng) {
+      if (!geometry) return false;
+
+      const type = geometry.getType();
+
+      if (type === "Polygon") {
+        return polygonContainsLatLng(geometry, latLng);
+      }
+
+      if (type === "MultiPolygon") {
+        return geometry.getArray().some(
+          (polygon) => polygonContainsLatLng(polygon, latLng)
+        );
+      }
+
+      if (type === "GeometryCollection") {
+        return geometry.getArray().some(
+          (part) => geometryContainsLatLng(part, latLng)
+        );
+      }
+
+      return false;
+    }
+
+    function polygonContainsLatLng(polygon, latLng) {
+      const rings = polygon.getArray();
+      if (!rings || rings.length === 0) return false;
+
+      if (!ringContainsLatLng(rings[0].getArray(), latLng)) {
+        return false;
+      }
+
+      for (let i = 1; i < rings.length; i++) {
+        if (ringContainsLatLng(rings[i].getArray(), latLng)) {
+          return false;
+        }
+      }
+
+      return true;
+    }
+
+    function ringContainsLatLng(path, latLng) {
+      const x = latLng.lng();
+      const y = latLng.lat();
+      let inside = false;
+
+      for (let i = 0, j = path.length - 1; i < path.length; j = i++) {
+        const xi = path[i].lng();
+        const yi = path[i].lat();
+        const xj = path[j].lng();
+        const yj = path[j].lat();
+
+        const intersects =
+          ((yi > y) !== (yj > y)) &&
+          (x < ((xj - xi) * (y - yi)) /
+            ((yj - yi) || Number.EPSILON) + xi);
+
+        if (intersects) inside = !inside;
+      }
+
+      return inside;
     }
 
     function updateStatus() {
