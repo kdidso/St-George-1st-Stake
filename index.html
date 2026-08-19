@@ -297,8 +297,9 @@
       background: #fafafa;
     }
 
-    .search-attribution a {
-      color: inherit;
+    .google-attribution {
+      font-weight: 600;
+      letter-spacing: 0.01em;
     }
 
     /* ---------- Status ---------- */
@@ -545,10 +546,7 @@
     let loadedWardCount = 0;
     let searchMarker = null;
     let searchTimer = null;
-    let activeSearchController = null;
-
-    // Browser token restricted in LocationIQ to the user's GitHub Pages domain.
-    const LOCATIONIQ_TOKEN = "pk.d447414bd6ee111b4987d8c82289fca3";
+    let googleAutocompleteRequestId = 0;
 
     // Prefer known stake/member-address coordinates from the existing
     // Snow Canyon map, while still using LocationIQ for general search.
@@ -1304,147 +1302,119 @@
     }
 
     async function runLocationSearch(query) {
-      const resultsBox = document.getElementById("searchResults");
       const specialResults = getSpecialLocationMatches(query, 6);
-      const localResults = getStakeAddressMatches(query, 6);
+      const stakeAddressResults = getStakeAddressMatches(query, 6);
 
-      if (activeSearchController) {
-        activeSearchController.abort();
+      if (specialResults.length > 0 || stakeAddressResults.length > 0) {
+        renderLocalSearchResults(specialResults, stakeAddressResults);
+        return;
       }
 
-      activeSearchController = new AbortController();
-
-      // Show known special places and stake addresses immediately while
-      // LocationIQ continues searching the broader world.
-      renderHybridSearchResults(
-        specialResults,
-        localResults,
-        [],
-        true
-      );
-
-      const params = new URLSearchParams({
-        key: LOCATIONIQ_TOKEN,
-        q: query,
-        countrycodes: "us",
-        limit: "6",
-        normalizecity: "1",
-        dedupe: "1",
-        "accept-language": "en"
-      });
-
-      if (snowCanyonBounds && !snowCanyonBounds.isEmpty()) {
-        const sw = snowCanyonBounds.getSouthWest();
-        const ne = snowCanyonBounds.getNorthEast();
-        params.set(
-          "viewbox",
-          [sw.lng(), sw.lat(), ne.lng(), ne.lat()].join(",")
-        );
-        params.set("bounded", "0");
-        params.set("importancesort", "0");
-      }
-
-      try {
-        const response = await fetch(
-          "https://api.locationiq.com/v1/autocomplete?" + params.toString(),
-          { signal: activeSearchController.signal }
-        );
-
-        if (!response.ok) {
-          throw new Error("Search request failed: " + response.status);
-        }
-
-        const results = await response.json();
-        renderHybridSearchResults(
-          specialResults,
-          localResults,
-          Array.isArray(results) ? results : [],
-          false
-        );
-      } catch (error) {
-        if (error.name === "AbortError") return;
-
-        renderHybridSearchResults(
-          specialResults,
-          localResults,
-          [],
-          false,
-          true
-        );
-        console.error("LocationIQ search error:", error);
-      }
+      await runGoogleAutocomplete(query);
     }
 
-    function renderHybridSearchResults(
-      specialResults,
-      localResults,
-      locationIqResults,
-      loadingLocationIq = false,
-      locationIqFailed = false
-    ) {
+    function renderLocalSearchResults(specialResults, stakeAddressResults) {
       const resultsBox = document.getElementById("searchResults");
       resultsBox.innerHTML = "";
 
       if (specialResults.length > 0) {
         addSearchSectionLabel(resultsBox, "Stake places");
-
         specialResults.forEach((result) => {
-          resultsBox.appendChild(
-            createSearchResultButton(result, "special")
-          );
+          resultsBox.appendChild(createSearchResultButton(result, "special"));
         });
       }
 
-      if (localResults.length > 0) {
+      if (stakeAddressResults.length > 0) {
         addSearchSectionLabel(resultsBox, "Stake addresses");
-
-        localResults.forEach((result) => {
-          resultsBox.appendChild(
-            createSearchResultButton(result, "stake")
-          );
+        stakeAddressResults.forEach((result) => {
+          resultsBox.appendChild(createSearchResultButton(result, "stake"));
         });
       }
 
-      if (loadingLocationIq) {
-        addSearchSectionLabel(resultsBox, "Other places");
-        const loading = document.createElement("div");
-        loading.className = "search-message";
-        loading.textContent = "Searching other addresses and places…";
-        resultsBox.appendChild(loading);
-      } else if (locationIqResults.length > 0) {
-        addSearchSectionLabel(resultsBox, "Other addresses & places");
+      resultsBox.style.display = "block";
+    }
 
-        locationIqResults.forEach((result) => {
-          resultsBox.appendChild(
-            createSearchResultButton(result, "locationiq")
-          );
-        });
+    async function runGoogleAutocomplete(query) {
+      const resultsBox = document.getElementById("searchResults");
+      const requestId = ++googleAutocompleteRequestId;
 
-        const attribution = document.createElement("div");
-        attribution.className = "search-attribution";
-        attribution.innerHTML =
-          'Search by <a href="https://locationiq.com/" target="_blank" rel="noopener">LocationIQ</a>';
-        resultsBox.appendChild(attribution);
-      } else if (locationIqFailed) {
-        const message = document.createElement("div");
-        message.className = "search-message";
-        message.textContent =
-          specialResults.length > 0 || localResults.length > 0
-            ? "Broader place search is temporarily unavailable."
-            : "Search is temporarily unavailable.";
-        resultsBox.appendChild(message);
-      } else if (specialResults.length === 0 && localResults.length === 0) {
-        const message = document.createElement("div");
-        message.className = "search-message";
-        message.textContent = "No matching places found.";
-        resultsBox.appendChild(message);
+      resultsBox.innerHTML =
+        '<div class="search-message">Searching Google…</div>';
+      resultsBox.style.display = "block";
 
-        const attribution = document.createElement("div");
-        attribution.className = "search-attribution";
-        attribution.innerHTML =
-          'Search by <a href="https://locationiq.com/" target="_blank" rel="noopener">LocationIQ</a>';
-        resultsBox.appendChild(attribution);
+      try {
+        const { AutocompleteSuggestion } =
+          await google.maps.importLibrary("places");
+
+        const request = {
+          input: query,
+          includedRegionCodes: ["us"],
+          language: "en-US",
+          region: "us"
+        };
+
+        if (snowCanyonBounds && !snowCanyonBounds.isEmpty()) {
+          request.locationBias = snowCanyonBounds;
+          request.origin = snowCanyonBounds.getCenter();
+        }
+
+        const { suggestions } =
+          await AutocompleteSuggestion.fetchAutocompleteSuggestions(request);
+
+        if (requestId !== googleAutocompleteRequestId) return;
+
+        const googleResults = (suggestions || [])
+          .map((suggestion) => {
+            const prediction = suggestion.placePrediction;
+            if (!prediction) return null;
+
+            return {
+              source: "google",
+              placeId: prediction.placeId,
+              display_name: prediction.text.toString(),
+              mainText: prediction.mainText
+                ? prediction.mainText.toString()
+                : prediction.text.toString(),
+              secondaryText: prediction.secondaryText
+                ? prediction.secondaryText.toString()
+                : ""
+            };
+          })
+          .filter(Boolean)
+          .slice(0, 6);
+
+        renderGoogleSearchResults(googleResults);
+      } catch (error) {
+        if (requestId !== googleAutocompleteRequestId) return;
+
+        resultsBox.innerHTML =
+          '<div class="search-message">Google address search is temporarily unavailable.</div>';
+        resultsBox.style.display = "block";
+        console.error("Google autocomplete error:", error);
       }
+    }
+
+    function renderGoogleSearchResults(results) {
+      const resultsBox = document.getElementById("searchResults");
+      resultsBox.innerHTML = "";
+
+      if (results.length === 0) {
+        resultsBox.innerHTML =
+          '<div class="search-message">No matching Google results found.</div>';
+        resultsBox.style.display = "block";
+        return;
+      }
+
+      addSearchSectionLabel(resultsBox, "Google results");
+
+      results.forEach((result) => {
+        resultsBox.appendChild(createSearchResultButton(result, "google"));
+      });
+
+      const attribution = document.createElement("div");
+      attribution.className = "search-attribution google-attribution";
+      attribution.textContent = "Powered by Google";
+      resultsBox.appendChild(attribution);
 
       resultsBox.style.display = "block";
     }
@@ -1481,6 +1451,18 @@
           addressLine.textContent = result.address;
           main.appendChild(addressLine);
         }
+      } else if (sourceType === "google") {
+        const nameLine = document.createElement("div");
+        nameLine.className = "special-place-name";
+        nameLine.textContent = result.mainText || result.display_name;
+        main.appendChild(nameLine);
+
+        if (result.secondaryText) {
+          const addressLine = document.createElement("div");
+          addressLine.className = "special-place-address";
+          addressLine.textContent = result.secondaryText;
+          main.appendChild(addressLine);
+        }
       } else {
         main.textContent =
           result.display_name || result.name || "Search result";
@@ -1499,10 +1481,65 @@
       }
 
       button.addEventListener("click", () => {
-        selectSearchResult(result);
+        if (sourceType === "google") {
+          selectGoogleSearchResult(result);
+        } else {
+          selectSearchResult(result);
+        }
       });
 
       return button;
+    }
+
+    async function selectGoogleSearchResult(result) {
+      if (!result.placeId) return;
+
+      const resultsBox = document.getElementById("searchResults");
+      hideSearchResults();
+
+      try {
+        const geocoder = new google.maps.Geocoder();
+        const response = await geocoder.geocode({
+          placeId: result.placeId
+        });
+
+        if (!response.results || response.results.length === 0) {
+          throw new Error("No geocoding result returned.");
+        }
+
+        const geocodeResult = response.results[0];
+        const latLng = geocodeResult.geometry.location;
+        const label =
+          geocodeResult.formatted_address ||
+          result.display_name ||
+          "Selected location";
+
+        const input = document.getElementById("placeSearch");
+        input.value = label;
+        document.getElementById("clearSearch").style.display = "block";
+
+        if (searchMarker) {
+          searchMarker.setMap(null);
+        }
+
+        searchMarker = new google.maps.Marker({
+          position: latLng,
+          map: map,
+          title: label
+        });
+
+        map.panTo(latLng);
+        map.setZoom(17);
+
+        window.setTimeout(() => {
+          showWardsAtLocation(latLng, label);
+        }, 150);
+      } catch (error) {
+        resultsBox.innerHTML =
+          '<div class="search-message">Could not locate that Google result.</div>';
+        resultsBox.style.display = "block";
+        console.error("Google geocoding error:", error);
+      }
     }
 
     function selectSearchResult(result) {
@@ -1543,14 +1580,6 @@
     function hideSearchResults() {
       const resultsBox = document.getElementById("searchResults");
       resultsBox.style.display = "none";
-    }
-
-    function locationIqAttribution() {
-      return (
-        '<div class="search-attribution">' +
-          'Search by <a href="https://locationiq.com/" target="_blank" rel="noopener">LocationIQ</a>' +
-        '</div>'
-      );
     }
 
     function showWardsAtLocation(latLng, locationLabel = "") {
