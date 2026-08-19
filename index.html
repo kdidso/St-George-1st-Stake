@@ -1262,50 +1262,71 @@
       if (normalizedQuery.length < 2) return [];
 
       const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+      const looksLikeAddress = queryTokens.some((token) => /\d/.test(token));
 
       const scored = specialLocationRecords.map((record) => {
         const name = normalizeSearchText(record.name);
         const address = normalizeSearchText(record.address);
-        const combined = [name, address].filter(Boolean).join(" ");
+
+        const nameTokens = name.split(" ").filter(Boolean);
+        const addressTokens = address.split(" ").filter(Boolean);
+
         let score = 0;
+        let matchedAllTokens = true;
 
-        // Name matches are strongest for special places.
-        if (name) {
-          if (name.startsWith(normalizedQuery)) {
-            score += 1200;
-          } else if (name.includes(normalizedQuery)) {
-            score += 850;
-          }
+        /*
+          If the query looks like an address, compare primarily against the
+          special location's address. If it looks like a place name, compare
+          primarily against the name.
+        */
+        const primaryText = looksLikeAddress ? address : name;
+        const primaryTokens = looksLikeAddress ? addressTokens : nameTokens;
+        const secondaryText = looksLikeAddress ? name : address;
+        const secondaryTokens = looksLikeAddress ? nameTokens : addressTokens;
+
+        if (primaryText.startsWith(normalizedQuery)) {
+          score += 1400;
+        } else if (primaryText.includes(normalizedQuery)) {
+          score += 900;
         }
 
-        // Address matches should also surface the same special location.
-        if (address) {
-          if (address.startsWith(normalizedQuery)) {
-            score += 1000;
-          } else if (address.includes(normalizedQuery)) {
-            score += 700;
-          }
-        }
+        queryTokens.forEach((queryToken, index) => {
+          const samePosition = primaryTokens[index];
 
-        let tokenMatches = 0;
-        queryTokens.forEach((queryToken) => {
-          const nameTokens = name.split(" ");
-          const addressTokens = address.split(" ");
-
-          if (nameTokens.some((token) => token.startsWith(queryToken))) {
-            score += 130;
-            tokenMatches += 1;
-          } else if (addressTokens.some((token) => token.startsWith(queryToken))) {
-            score += 80;
-            tokenMatches += 1;
-          } else if (combined.includes(queryToken)) {
-            score += 35;
-            tokenMatches += 1;
+          if (samePosition && samePosition.startsWith(queryToken)) {
+            score += 160;
+            return;
           }
+
+          if (primaryTokens.some((token) => token.startsWith(queryToken))) {
+            score += 70;
+            return;
+          }
+
+          // Secondary field may help, but only modestly.
+          if (secondaryTokens.some((token) => token.startsWith(queryToken))) {
+            score += 25;
+            return;
+          }
+
+          matchedAllTokens = false;
         });
 
-        if (tokenMatches === queryTokens.length) {
-          score += 220;
+        /*
+          Critical rule: unrelated stake places should not appear merely
+          because one generic token matched. Every typed token must still
+          plausibly match the name/address.
+        */
+        if (
+          !matchedAllTokens &&
+          !primaryText.startsWith(normalizedQuery) &&
+          !primaryText.includes(normalizedQuery)
+        ) {
+          return { ...record, score: 0 };
+        }
+
+        if (matchedAllTokens) {
+          score += 300;
         }
 
         return { ...record, score };
@@ -1323,31 +1344,53 @@
     async function runLocationSearch(query) {
       const specialResults = getSpecialLocationMatches(query, 6);
       const stakeAddressResults = getStakeAddressMatches(query, 6);
+      const normalizedQuery = normalizeSearchText(query);
+      const looksLikeAddress =
+        normalizedQuery.split(" ").some((token) => /\d/.test(token));
 
       if (specialResults.length > 0 || stakeAddressResults.length > 0) {
-        renderLocalSearchResults(specialResults, stakeAddressResults);
+        renderLocalSearchResults(
+          specialResults,
+          stakeAddressResults,
+          looksLikeAddress
+        );
         return;
       }
 
       await runGoogleAutocomplete(query);
     }
 
-    function renderLocalSearchResults(specialResults, stakeAddressResults) {
+    function renderLocalSearchResults(
+      specialResults,
+      stakeAddressResults,
+      looksLikeAddress
+    ) {
       const resultsBox = document.getElementById("searchResults");
       resultsBox.innerHTML = "";
 
-      if (specialResults.length > 0) {
-        addSearchSectionLabel(resultsBox, "Stake places");
-        specialResults.forEach((result) => {
-          resultsBox.appendChild(createSearchResultButton(result, "special"));
-        });
-      }
-
-      if (stakeAddressResults.length > 0) {
+      const addStakeAddresses = () => {
+        if (stakeAddressResults.length === 0) return;
         addSearchSectionLabel(resultsBox, "Stake addresses");
         stakeAddressResults.forEach((result) => {
           resultsBox.appendChild(createSearchResultButton(result, "stake"));
         });
+      };
+
+      const addStakePlaces = () => {
+        if (specialResults.length === 0) return;
+        addSearchSectionLabel(resultsBox, "Stake places");
+        specialResults.forEach((result) => {
+          resultsBox.appendChild(createSearchResultButton(result, "special"));
+        });
+      };
+
+      // Address-like input: exact/near-exact known addresses should come first.
+      if (looksLikeAddress) {
+        addStakeAddresses();
+        addStakePlaces();
+      } else {
+        addStakePlaces();
+        addStakeAddresses();
       }
 
       resultsBox.style.display = "block";
