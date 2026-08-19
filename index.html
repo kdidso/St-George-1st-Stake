@@ -1173,39 +1173,60 @@
 
       const queryTokens = normalizedQuery.split(" ").filter(Boolean);
 
+      /*
+        Member-location records are residential addresses, not general place
+        names. Require the query to look address-like before these results are
+        allowed to suppress Google. This prevents a place search such as
+        "cedar flats stu" from matching an unrelated address merely because
+        it contains the word "Cedar".
+      */
+      const looksLikeStreetAddress = queryTokens.some((token) => /\d/.test(token));
+      if (!looksLikeStreetAddress) return [];
+
       const scored = stakeAddressRecords.map((record) => {
         const address = normalizeSearchText(record.display_name);
+        const addressTokens = address.split(" ").filter(Boolean);
+
         let score = 0;
-
-        // Strongest preference: the entered text is the beginning of the address.
-        if (address.startsWith(normalizedQuery)) {
-          score += 1000;
-        } else if (address.includes(normalizedQuery)) {
-          score += 650;
-        }
-
-        // Also handle partial entry such as "123 red" against
-        // "123 Red Cliffs Dr ..." and other token-by-token beginnings.
-        const addressTokens = address.split(" ");
         let tokenMatches = 0;
+
+        // Very strong match when the typed string follows the beginning
+        // of the known address.
+        if (address.startsWith(normalizedQuery)) {
+          score += 1200;
+        } else if (address.includes(normalizedQuery)) {
+          score += 700;
+        }
 
         queryTokens.forEach((queryToken, index) => {
           const samePosition = addressTokens[index];
+
           if (samePosition && samePosition.startsWith(queryToken)) {
-            score += 120;
+            score += 140;
             tokenMatches += 1;
             return;
           }
 
           if (addressTokens.some((token) => token.startsWith(queryToken))) {
-            score += 45;
+            score += 55;
             tokenMatches += 1;
           }
         });
 
-        // Prefer results where every entered token matched.
+        /*
+          Crucial rule: every typed token must still be explainable by the
+          local address. If even one token has stopped matching, this address
+          no longer counts as a plausible local continuation and Google is
+          allowed to take over.
+        */
+        if (tokenMatches !== queryTokens.length &&
+            !address.startsWith(normalizedQuery) &&
+            !address.includes(normalizedQuery)) {
+          return { ...record, score: 0 };
+        }
+
         if (tokenMatches === queryTokens.length) {
-          score += 200;
+          score += 300;
         }
 
         return { ...record, score };
@@ -1218,8 +1239,6 @@
           a.display_name.localeCompare(b.display_name)
         );
 
-      // Remove duplicate address rows. If unit/apartment information exists,
-      // extractAddressFromProperties() makes those distinct before this step.
       const seen = new Set();
       const unique = [];
 
