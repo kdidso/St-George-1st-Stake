@@ -572,6 +572,8 @@
         id: "greenValley",
         name: "Green Valley YSA Ward",
         ageGroup: "18-25",
+        meetingTime: "1:30 PM",
+        chapel: "East Chapel",
         file: "Green_Valley_FeaturesToJSON.geojson",
         color: "#1976D2"
       },
@@ -579,6 +581,8 @@
         id: "heights",
         name: "Heights YSA Ward",
         ageGroup: "18-25",
+        meetingTime: "9:00 AM",
+        chapel: "West Chapel",
         file: "Heights_Ward_FeaturesToJSON.geojson",
         color: "#E65100"
       },
@@ -586,6 +590,8 @@
         id: "ivins",
         name: "Ivins YSA Ward",
         ageGroup: "18-25",
+        meetingTime: "9:00 AM",
+        chapel: "East Chapel",
         file: "Ivins_Ward_FeaturesToJSON.geojson",
         color: "#7B1FA2"
       },
@@ -593,6 +599,8 @@
         id: "santaClara",
         name: "Santa Clara YSA Ward",
         ageGroup: "18-25",
+        meetingTime: "1:30 PM",
+        chapel: "West Chapel",
         file: "Santa_Clara_Ward_FeaturesToJSON.geojson",
         color: "#F9A825"
       },
@@ -600,6 +608,8 @@
         id: "snowCanyon",
         name: "Snow Canyon YSA Ward",
         ageGroup: "26-35",
+        meetingTime: "12:00 PM",
+        chapel: "West Chapel",
         file: "Snow_Canyon_ward_FeaturesToJSON.geojson",
         color: "#37474F"
       },
@@ -607,6 +617,8 @@
         id: "southGate",
         name: "Southgate YSA Ward",
         ageGroup: "18-25",
+        meetingTime: "12:00 PM",
+        chapel: "East Chapel",
         file: "South_Gate_Ward_FeaturesToJSON.geojson",
         color: "#D81B60"
       },
@@ -614,6 +626,8 @@
         id: "stGeorge1st",
         name: "St. George 1st YSA Ward",
         ageGroup: "18-25",
+        meetingTime: "10:30 AM",
+        chapel: "East Chapel",
         file: "St_George_1st_ward_FeaturesToJSON.geojson",
         color: "#388E3C"
       },
@@ -621,6 +635,8 @@
         id: "stGeorge3rd",
         name: "St. George 3rd YSA Ward",
         ageGroup: "18-25",
+        meetingTime: "10:30 AM",
+        chapel: "West Chapel",
         file: "St_George_3rd_ward_FeaturesToJSON.geojson",
         color: "#0097A7"
       }
@@ -1669,12 +1685,19 @@
           '</div>';
       } else {
         const rows = matches.map((matchedWard) => (
-          '<div style="display:flex;align-items:center;gap:7px;margin-top:7px;">' +
+          '<div style="display:flex;align-items:flex-start;gap:7px;margin-top:9px;">' +
             '<span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
-              'background:' + matchedWard.color + ';border:1px solid rgba(0,0,0,.35);"></span>' +
-            '<div><strong>' + escapeHtml(matchedWard.name) + '</strong>' +
-              '<span style="color:#666;margin-left:5px;">(' +
-                escapeHtml(matchedWard.ageGroup) + ')</span></div>' +
+              'background:' + matchedWard.color + ';border:1px solid rgba(0,0,0,.35);' +
+              'margin-top:3px;flex:0 0 auto;"></span>' +
+            '<div>' +
+              '<div><strong>' + escapeHtml(matchedWard.name) + '</strong>' +
+                '<span style="color:#666;margin-left:5px;">(' +
+                  escapeHtml(matchedWard.ageGroup) + ')</span></div>' +
+              '<div style="color:#555;font-size:12px;margin-top:2px;">' +
+                escapeHtml(matchedWard.meetingTime) + ' • ' +
+                escapeHtml(matchedWard.chapel) +
+              '</div>' +
+            '</div>' +
           '</div>'
         )).join("");
 
